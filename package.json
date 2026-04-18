@@ -4,20 +4,36 @@
   "description": "AI Supply Chain Attack Detector",
   "version": "0.0.1",
   "engines": {
-    "vscode": "^1.116.0"
+    "vscode": "^1.80.0"
   },
   "categories": [
-    "Other"
+    "Security",
+    "Linters"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "*"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
+        "command": "invisible-security.scanWorkspace",
+        "title": "Invisible Security: Scan Workspace",
+        "category": "Security"
+      },
+      {
         "command": "invisible-security.helloWorld",
         "title": "Hello World"
       }
-    ]
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "invisible-security.scanWorkspace",
+          "when": "true"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

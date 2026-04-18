@@ -54,30 +54,41 @@ def analyze_package(package: PackageCheck):
     # 2. NPM Registry Check (Hallucinations & Age Heuristics)
     npm_url = f"https://registry.npmjs.org/{pkg_name}"
     try:
-        npm_response = requests.get(npm_url, timeout=5)
+        # Increased timeout to 10s for hackathon Wi-Fi
+        npm_response = requests.get(npm_url, timeout=10)
         
         if npm_response.status_code == 404:
             print(f"[WARN] Package not found on NPM (Hallucination): {pkg_name}")
             return {
                 "status": "danger",
                 "type": "hallucination",
-                "message": f"Package '{pkg_name}' does not exist on npm."
+                "message": f"Package '{pkg_name}' does not exist on npm.",
+                "analysis": f"🚨 HIGH RISK: '{pkg_name}' does not exist on the official registry. This is a classic AI Hallucination trap. Attackers actively look for these fake names to publish malware. Remove this import immediately."
             }
             
         if npm_response.status_code == 200:
             data = npm_response.json()
-            if "time" in data and "created" in data["time"]:
-                created_date_str = data["time"]["created"].replace("Z", "+00:00")
-                created_date = datetime.fromisoformat(created_date_str)
-                days_old = (datetime.now(timezone.utc) - created_date).days
-                
-                if days_old < 30:
-                    print(f"[INFO] Package is suspiciously new: {pkg_name} ({days_old} days old)")
-                    return {
-                        "status": "warning",
-                        "type": "new_package",
-                        "message": f"Package was created {days_old} days ago. Verify authenticity."
-                    }
+            
+            # Safely navigate the JSON dictionary using .get() to prevent crashes
+            time_data = data.get("time", {})
+            created_date_str = time_data.get("created")
+            
+            if created_date_str:
+                try:
+                    created_date_str = created_date_str.replace("Z", "+00:00")
+                    created_date = datetime.fromisoformat(created_date_str)
+                    days_old = (datetime.now(timezone.utc) - created_date).days
+                    
+                    if days_old < 30:
+                        print(f"[INFO] Package is suspiciously new: {pkg_name} ({days_old} days old)")
+                        return {
+                            "status": "danger",
+                            "type": "new_package",
+                            "message": f"Package was created {days_old} days ago. Verify authenticity."
+                        }
+                except Exception as date_error:
+                    print(f"[ERROR] Date parsing failed for {pkg_name}: {date_error}")
+                    
     except requests.RequestException as e:
         print(f"[ERROR] NPM registry timeout/error for {pkg_name}: {e}")
 
@@ -85,7 +96,8 @@ def analyze_package(package: PackageCheck):
     osv_url = "https://api.osv.dev/v1/query"
     payload = {"package": {"name": pkg_name, "ecosystem": "npm"}}
     try:
-        osv_response = requests.post(osv_url, json=payload, timeout=5)
+        # Increased timeout to 10s
+        osv_response = requests.post(osv_url, json=payload, timeout=10)
         if osv_response.status_code == 200:
             data = osv_response.json()
             if "vulns" in data:
@@ -115,12 +127,13 @@ def check_bulk(data: BulkCheck):
     for pkg in data.packages:
         payload = {"package": {"name": pkg, "ecosystem": "npm"}}
         try:
-            response = requests.post(osv_url, json=payload, timeout=5)
+            response = requests.post(osv_url, json=payload, timeout=10)
             if response.status_code == 200:
                 osv_data = response.json()
                 if "vulns" in osv_data:
+                    # FIX: Use 'name' to match scanner.ts and ONLY add danger items
                     report.append({
-                        "package": pkg,
+                        "name": pkg,
                         "status": "danger",
                         "message": "Vulnerability Found"
                     })
@@ -128,11 +141,6 @@ def check_bulk(data: BulkCheck):
         except requests.RequestException:
             pass  # Fail gracefully to avoid breaking the entire bulk scan loop
         
-        report.append({
-            "package": pkg,
-            "status": "safe",
-            "message": "Clean"
-        })
-        
     print(f"[INFO] Bulk scan completed.")
-    return {"results": report}
+    # FIX: Return key 'threats' to match scanner.ts
+    return {"threats": report}

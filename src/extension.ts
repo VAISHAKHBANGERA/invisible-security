@@ -1,28 +1,38 @@
 import * as vscode from 'vscode';
 import axios from 'axios';
-// Updated to match his filename: scanner.ts
 import { scanPackageJson } from './scanner'; 
+import { SecurityQuickFix, ThreatHoverProvider, SecurityCodeLensProvider } from './uiProviders';
 
 let typingTimer: NodeJS.Timeout | undefined = undefined;
 let diagnosticCollection: vscode.DiagnosticCollection;
+let statusBarItem: vscode.StatusBarItem;
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Invisible Security: Shield is UP!');
+    console.log('Invisible Security: Engine and UI are linked!');
 
-    // 1. Initialize Red Squiggly Engine
+    statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    statusBarItem.text = "$(shield) Invisible Sec: Safe";
+    statusBarItem.show();
+    context.subscriptions.push(statusBarItem);
+
     diagnosticCollection = vscode.languages.createDiagnosticCollection('invisible-security');
     context.subscriptions.push(diagnosticCollection);
 
-    // 2. YOUR FEATURE: Real-Time Keystroke Listener
-    let documentChangeListener = vscode.workspace.onDidChangeTextDocument(event => {
-        if (typingTimer) clearTimeout(typingTimer);
-        typingTimer = setTimeout(() => {
-            scanCurrentLine(event.document, event.contentChanges);
-        }, 1000);
-    });
-    context.subscriptions.push(documentChangeListener);
+    context.subscriptions.push(vscode.languages.registerCodeActionsProvider(['javascript', 'typescript'], new SecurityQuickFix()));
+    context.subscriptions.push(vscode.languages.registerHoverProvider(['javascript', 'typescript'], new ThreatHoverProvider()));
+    context.subscriptions.push(vscode.languages.registerCodeLensProvider(['javascript', 'typescript'], new SecurityCodeLensProvider()));
 
-    // 3. MEMBER 3 FEATURE: Link the button to scanner.ts
+    let fixCommand = vscode.commands.registerCommand('invisible-security.hoverFix', (uri: vscode.Uri, range: vscode.Range, actionString: string) => {
+        const edit = new vscode.WorkspaceEdit();
+        if (actionString === 'DELETE') {
+            edit.delete(uri, range); 
+        } else {
+            edit.replace(uri, range, actionString); 
+        }
+        vscode.workspace.applyEdit(edit);
+    });
+    context.subscriptions.push(fixCommand);
+
     let workspaceScanCommand = vscode.commands.registerCommand('invisible-security.scanWorkspace', async () => {
         try {
             await scanPackageJson();
@@ -32,24 +42,25 @@ export function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(workspaceScanCommand);
 
-    // 4. MEMBER 4 UI COMMAND: (Used by their Quick Fix code)
-    let fixCommand = vscode.commands.registerCommand('invisible-security.hoverFix', (uri: vscode.Uri, range: vscode.Range, safeWord: string) => {
-        const edit = new vscode.WorkspaceEdit();
-        edit.replace(uri, range, safeWord);
-        vscode.workspace.applyEdit(edit);
+    let documentChangeListener = vscode.workspace.onDidChangeTextDocument(event => {
+        if (typingTimer) clearTimeout(typingTimer);
+        typingTimer = setTimeout(() => {
+            scanCurrentLine(event.document, event.contentChanges);
+        }, 1000); 
     });
-    context.subscriptions.push(fixCommand);
+    context.subscriptions.push(documentChangeListener);
 }
 
-// --- CORE LOGIC: REAL-TIME SCANNER ---
 async function scanCurrentLine(document: vscode.TextDocument, changes: readonly vscode.TextDocumentContentChangeEvent[]) {
     if (changes.length === 0) return;
 
     const changedLineNumber = changes[0].range.start.line;
     const lineText = document.lineAt(changedLineNumber).text;
-    const match = /(?:import.*from|require\()\s*['"]([^'"]+)['"]/.exec(lineText);
+    
+    const match = /(?:import\s+.*\s+from|import|require)\s*['"]([^'"]+)['"]/.exec(lineText);
 
-    diagnosticCollection.set(document.uri, []);
+    // Get current diagnostics to modify them selectively
+    let currentDiagnostics = [...(diagnosticCollection.get(document.uri) || [])];
 
     if (match && match[1]) {
         const packageName = match[1]; 
@@ -57,12 +68,15 @@ async function scanCurrentLine(document: vscode.TextDocument, changes: readonly 
         try {
             const response = await axios.post('http://127.0.0.1:8000/analyze', { 
                 name: packageName 
-            }, { timeout: 5000 });
+            }, { timeout: 10000 });
 
             const { status, message } = response.data;
 
+            // Remove any existing diagnostic for THIS specific line before updating
+            currentDiagnostics = currentDiagnostics.filter(d => d.range.start.line !== changedLineNumber);
+
             if (status === "danger" || status === "warning") {
-                const startIndex = lineText.lastIndexOf(packageName);
+                const startIndex = lineText.indexOf(packageName);
                 const startPos = new vscode.Position(changedLineNumber, startIndex);
                 const endPos = new vscode.Position(changedLineNumber, startIndex + packageName.length);
                 const range = new vscode.Range(startPos, endPos);
@@ -75,11 +89,49 @@ async function scanCurrentLine(document: vscode.TextDocument, changes: readonly 
                     severity
                 );
                 
-                diagnostic.code = 'typosquat'; 
-                diagnosticCollection.set(document.uri, [diagnostic]);
+                const msgLower = message.toLowerCase();
+
+                if (msgLower.includes('hallucination') || msgLower.includes('not exist')) {
+                    diagnostic.code = 'hallucination';
+                } else if (msgLower.includes('typosquat') || msgLower.includes('mean')) {
+                    diagnostic.code = 'typosquat';
+                } else if (msgLower.includes('vulnerabilit')) {
+                    diagnostic.code = 'osv-vulnerability';
+                } else if (msgLower.includes('created') || msgLower.includes('days ago') || msgLower.includes('zero-day')) {
+                    diagnostic.code = 'zero-day-risk';
+                } else {
+                    diagnostic.code = 'security-risk'; 
+                }
+
+                currentDiagnostics.push(diagnostic);
+                diagnosticCollection.set(document.uri, currentDiagnostics);
+
+                if (statusBarItem) {
+                    statusBarItem.text = "$(alert) Invisible Sec: THREAT DETECTED";
+                    statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+                }
+            } else {
+                // If the package is SAFE, clear only this line's diagnostic
+                diagnosticCollection.set(document.uri, currentDiagnostics);
+                
+                // Reset status bar if no other errors exist in the file
+                if (currentDiagnostics.length === 0 && statusBarItem) {
+                    statusBarItem.text = "$(shield) Invisible Sec: Safe";
+                    statusBarItem.backgroundColor = undefined; 
+                }
             }
         } catch (error) {
-            console.error("[Invisible Security] Connection to Backend failed.");
+            console.error("[Invisible Security] Backend connection error.");
+        }
+    } else {
+        // If the user deleted the text or it's no longer an import,
+        // we clear the diagnostic for THIS line ONLY.
+        const filteredDiagnostics = currentDiagnostics.filter(d => d.range.start.line !== changedLineNumber);
+        diagnosticCollection.set(document.uri, filteredDiagnostics);
+
+        if (filteredDiagnostics.length === 0 && statusBarItem) {
+            statusBarItem.text = "$(shield) Invisible Sec: Safe";
+            statusBarItem.backgroundColor = undefined; 
         }
     }
 }
