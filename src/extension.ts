@@ -1,28 +1,43 @@
 import * as vscode from 'vscode';
 import axios from 'axios';
-// Updated to match his filename: scanner.ts
 import { scanPackageJson } from './scanner'; 
+import { SecurityQuickFix, ThreatHoverProvider, SecurityCodeLensProvider } from './uiProviders';
 
 let typingTimer: NodeJS.Timeout | undefined = undefined;
 let diagnosticCollection: vscode.DiagnosticCollection;
+let statusBarItem: vscode.StatusBarItem;
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Invisible Security: Shield is UP!');
+    console.log('Invisible Security: Engine and UI are linked!');
 
-    // 1. Initialize Red Squiggly Engine
+    // 1. MEMBER 4: Initialize Status Bar
+    statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    statusBarItem.text = "$(shield) Invisible Sec: Safe";
+    statusBarItem.show();
+    context.subscriptions.push(statusBarItem);
+
+    // 2. Initialize Red Squiggly Engine
     diagnosticCollection = vscode.languages.createDiagnosticCollection('invisible-security');
     context.subscriptions.push(diagnosticCollection);
 
-    // 2. YOUR FEATURE: Real-Time Keystroke Listener
-    let documentChangeListener = vscode.workspace.onDidChangeTextDocument(event => {
-        if (typingTimer) clearTimeout(typingTimer);
-        typingTimer = setTimeout(() => {
-            scanCurrentLine(event.document, event.contentChanges);
-        }, 1000);
-    });
-    context.subscriptions.push(documentChangeListener);
+    // 3. WIRING MEMBER 4's UI: Registering the imported classes
+    context.subscriptions.push(vscode.languages.registerCodeActionsProvider(['javascript', 'typescript'], new SecurityQuickFix()));
+    context.subscriptions.push(vscode.languages.registerHoverProvider(['javascript', 'typescript'], new ThreatHoverProvider()));
+    context.subscriptions.push(vscode.languages.registerCodeLensProvider(['javascript', 'typescript'], new SecurityCodeLensProvider()));
 
-    // 3. MEMBER 3 FEATURE: Link the button to scanner.ts
+    // 4. WIRING MEMBER 4's UI: The Clickable Hover Command
+    let fixCommand = vscode.commands.registerCommand('invisible-security.hoverFix', (uri: vscode.Uri, range: vscode.Range, actionString: string) => {
+        const edit = new vscode.WorkspaceEdit();
+        if (actionString === 'DELETE') {
+            edit.delete(uri, range); 
+        } else {
+            edit.replace(uri, range, actionString); 
+        }
+        vscode.workspace.applyEdit(edit);
+    });
+    context.subscriptions.push(fixCommand);
+
+    // 5. MEMBER 3: Link the button to scanner.ts
     let workspaceScanCommand = vscode.commands.registerCommand('invisible-security.scanWorkspace', async () => {
         try {
             await scanPackageJson();
@@ -32,16 +47,17 @@ export function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(workspaceScanCommand);
 
-    // 4. MEMBER 4 UI COMMAND: (Used by their Quick Fix code)
-    let fixCommand = vscode.commands.registerCommand('invisible-security.hoverFix', (uri: vscode.Uri, range: vscode.Range, safeWord: string) => {
-        const edit = new vscode.WorkspaceEdit();
-        edit.replace(uri, range, safeWord);
-        vscode.workspace.applyEdit(edit);
+    // 6. MEMBER 1: Real-Time Keystroke Listener
+    let documentChangeListener = vscode.workspace.onDidChangeTextDocument(event => {
+        if (typingTimer) clearTimeout(typingTimer);
+        typingTimer = setTimeout(() => {
+            scanCurrentLine(event.document, event.contentChanges);
+        }, 1000);
     });
-    context.subscriptions.push(fixCommand);
+    context.subscriptions.push(documentChangeListener);
 }
 
-// --- CORE LOGIC: REAL-TIME SCANNER ---
+// --- MEMBER 1 CORE LOGIC: REAL-TIME SCANNER ---
 async function scanCurrentLine(document: vscode.TextDocument, changes: readonly vscode.TextDocumentContentChangeEvent[]) {
     if (changes.length === 0) return;
 
@@ -50,6 +66,11 @@ async function scanCurrentLine(document: vscode.TextDocument, changes: readonly 
     const match = /(?:import.*from|require\()\s*['"]([^'"]+)['"]/.exec(lineText);
 
     diagnosticCollection.set(document.uri, []);
+    
+    if (statusBarItem) {
+        statusBarItem.text = "$(shield) Invisible Sec: Safe";
+        statusBarItem.backgroundColor = undefined; 
+    }
 
     if (match && match[1]) {
         const packageName = match[1]; 
@@ -75,8 +96,13 @@ async function scanCurrentLine(document: vscode.TextDocument, changes: readonly 
                     severity
                 );
                 
-                diagnostic.code = 'typosquat'; 
+                diagnostic.code = message.toLowerCase().includes('hallucination') ? 'hallucination' : 'typosquat'; 
                 diagnosticCollection.set(document.uri, [diagnostic]);
+
+                if (statusBarItem) {
+                    statusBarItem.text = "$(alert) Invisible Sec: THREAT DETECTED";
+                    statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+                }
             }
         } catch (error) {
             console.error("[Invisible Security] Connection to Backend failed.");
